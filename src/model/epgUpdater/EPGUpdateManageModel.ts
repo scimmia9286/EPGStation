@@ -208,12 +208,15 @@ class EPGUpdateManageModel extends EventEmitter implements IEPGUpdateManageModel
             throw err;
         });
 
+        this.emit('event stream started');
+
         return new Promise<void>(async (_resolve: () => void, reject: (err: Error) => void) => {
             // エラー処理
             eventStream.once('error', err => {
                 this.log.system.error('event stream error');
                 this.log.system.error(err);
                 this.stopStream(eventStream);
+                this.emit('event stream aborted');
                 reject(err);
             });
 
@@ -270,6 +273,7 @@ class EPGUpdateManageModel extends EventEmitter implements IEPGUpdateManageModel
                     }
                     this.log.system.error(err);
                     this.stopStream(eventStream);
+                    this.emit('event stream aborted');
                     reject(new Error('EventStreamParseError'));
                 }
                 tmp = Buffer.from([]);
@@ -403,7 +407,9 @@ class EPGUpdateManageModel extends EventEmitter implements IEPGUpdateManageModel
      * 現在時刻より古い番組情報を削除
      */
     public async deleteOldPrograms(): Promise<void> {
+        this.log.system.info('delete old program db start');
         await this.programDB.deleteOld(new Date().getTime());
+        this.log.system.info('delete old program db done');
     }
 
     /**
