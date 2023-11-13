@@ -13,8 +13,6 @@ class EPGUpdater implements IEPGUpdater {
     private updateManage: IEPGUpdateManageModel;
 
     private isEventStreamAlive: boolean = false;
-    private lastUpdatedTime: number = 0;
-    private lastDeletedTime: number = 0;
 
     constructor(
         @inject('ILoggerModel') logger: ILoggerModel,
@@ -26,7 +24,6 @@ class EPGUpdater implements IEPGUpdater {
         this.updateManage = updateManage;
 
         this.updateManage.on('program updated', () => {
-            this.lastUpdatedTime = new Date().getTime();
             this.notify();
         });
         this.updateManage.on('service updated', () => {
@@ -46,7 +43,7 @@ class EPGUpdater implements IEPGUpdater {
         });
         this.notify();
 
-        const updateInterval = this.config.epgUpdateIntervalTime * 60 * 1000;
+        const updateTime = this.config.epgUpdateIntervalTime;
 
         // EventStream 監視ループ(watchdog)
         setInterval(async () => {
@@ -62,46 +59,59 @@ class EPGUpdater implements IEPGUpdater {
             }
         }, 10 * 1000);
 
-        // 溜め込んだservice queueを設定ファイルで指定されたサイクルでDBへ保存
-        setInterval(async () => {
-            try {
-                if (this.isEventStreamAlive === true) {
-                    await this.updateManage.saveService();
+        // 溜め込んだQueueを設定ファイルで指定されたサイクルでDBへ保存
+        setInterval(
+            async () => {
+                try {
+                    if (this.isEventStreamAlive === true) {
+                        await this.updateManage.saveService();
+                    }
+                } catch (err: any) {
+                    this.log.system.error('service update error');
+                    this.log.system.error(err);
                 }
-            } catch (err: any) {
-                this.log.system.error('service update error');
-                this.log.system.error(err);
-            }
-        }, updateInterval);
+            },
+            updateTime * 60 * 1000,
+        );
+        setInterval(
+            async () => {
+                try {
+                    if (this.isEventStreamAlive === true) {
+                        await this.updateManage.saveProgram();
+                    }
+                } catch (err: any) {
+                    this.log.system.error('program update error');
+                    this.log.system.error(err);
+                }
+            },
+            updateTime * 60 * 1000,
+        );
 
         // 放送中や放送開始時刻が間近の番組は短いサイクルでDBへ保存する
         // NOTE: DB負荷などを考慮しEvent受信と同時のDB反映は見合わせる
         setInterval(async () => {
-            const now = new Date().getTime();
-            if (this.isEventStreamAlive === true) {
-                try {
-                    await this.updateManage.saveProgram(now + 5 * 60 * 1000);
-                    if (this.lastUpdatedTime + updateInterval <= now) {
-                        await this.updateManage.saveProgram();
-                        this.lastUpdatedTime = now;
-                    }
-                } catch (err: any) {
-                    this.log.system.error('EPG update error');
-                    this.log.system.error(err);
+            try {
+                if (this.isEventStreamAlive === true) {
+                    const timeThreshold = new Date().getTime() + 5 * 60 * 1000;
+                    await this.updateManage.saveProgram(timeThreshold);
                 }
-
-                if (this.lastDeletedTime + updateInterval <= now) {
-                    // 古い番組情報を削除
-                    this.log.system.info('delete old programs start');
-                    await this.updateManage.deleteOldPrograms().catch(err => {
-                        this.log.system.error('delete old programs error');
-                        this.log.system.error(err);
-                    });
-                    this.log.system.info('delete old programs done');
-                    this.lastDeletedTime = now;
-                }
+            } catch (err: any) {
+                this.log.system.error('EPG update error');
+                this.log.system.error(err);
             }
         }, 10 * 1000);
+
+        setInterval(
+            async () => {
+                // 古い番組情報を削除
+                this.log.system.info('delete old programs');
+                await this.updateManage.deleteOldPrograms().catch(err => {
+                    this.log.system.error('delete old programs error');
+                    this.log.system.error(err);
+                });
+            },
+            30 * 60 * 1000,
+        );
     }
 
     /**
